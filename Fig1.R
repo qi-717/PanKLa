@@ -20,7 +20,7 @@ options(stringsAsFactors = F)
 Lactate_Metabolism_gs <- readRDS("Lactate_Metabolism_gene.rds")
 
 # read the list of pan-cancer scRNA-seq datasets
-scRNA_list <- readRDS("40_pancancer_scRNA_seq_dat.rds")
+scRNA_list <- qread("36_pancancer_scRNA_seq_dat.qs")    
 
 # calculate the LMx
 LMx_list <- pbapply::pblapply(
