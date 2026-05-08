@@ -1,56 +1,157 @@
-### ---------------
-###
-### Create: 
-### Date: 
-### Email: 
-### 
-###
-### ---------------
-
-
 rm(list = ls()); gc()
 options(stringsAsFactors = F)
-
 
 #----------------------------------------------------------------------------------
 # Step 1: calculate LMx
 #----------------------------------------------------------------------------------
 
 # read the list of LM-related genes
-Lactate_Metabolism_gs <- readRDS("Lactate_Metabolism_gene.rds")
+Lactate_Metabolism_gs <- readRDS("ubiquitination_gene.rds")
 
 # read the list of pan-cancer scRNA-seq datasets
-scRNA_list <- qread("36_pancancer_scRNA_seq_dat.qs")    
+scRNA_list <- qread("38_pancancer_scRNA_seq_dat.qs")    
 
-# calculate the LMx
-LMx_list <- pbapply::pblapply(
-  1:length(scRNA_list),
-  FUN = function(x) {
-    # x <- 1
-    sce <- scRNA_list[[x]]
-    Idents(sce) <- "Celltype..malignancy."
-    sce <- subset(sce, idents = "Malignant cells")
-    counts <- sce@assays$RNA@data
-    LM_gsva <- gsva(
-      expr = counts, gset.idx.list = Lactate_Metabolism_gs, kcdf = "Gaussian",
-      parallel.sz = 60
+
+library(Matrix)
+library(matrixStats)
+library(pbapply)
+library(GSVA)
+
+fast_spearman <- function(expr, score, block_size = 1000) {
+  score_rank <- rank(score, ties.method = "average")
+  score_rank <- score_rank - mean(score_rank)
+  score_ss <- sum(score_rank^2)
+  
+  coef <- rep(NA_real_, nrow(expr))
+  
+  for (i in seq(1, nrow(expr), by = block_size)) {
+    j <- min(i + block_size - 1, nrow(expr))
+    
+    x <- as.matrix(expr[i:j, , drop = FALSE])
+    
+    x_rank <- matrixStats::rowRanks(
+      x,
+      ties.method = "average",
+      preserveShape = TRUE
     )
-    LM_gsva <- as.data.frame(t(getAUC(LM_gsva)))
-    lmGenes <- data.frame(
-      gene = rownames(counts),
-      coef = NA, p = NA
+    
+    x_rank <- x_rank - rowMeans(x_rank)
+    
+    coef[i:j] <- as.numeric(
+      x_rank %*% score_rank / sqrt(rowSums(x_rank^2) * score_ss)
     )
-    for (i in 1:nrow(counts)) {
-      cor <- cor.test(counts[i, ], LM_gsva$Lactate_Metabolism, method = "spearman")
-      lmGenes$coef[i] <- cor$estimate
-      lmGenes$p[i] <- cor$p.value
-    }
-    lmGenes$p.adjust <- p.adjust(lmGenes$p, method = "BH")
-    return(lmGenes)
   }
-)
-names(LMx_list) <- names(scRNA_list)
+  
+  coef[!is.finite(coef)] <- NA_real_
+  
+  df <- length(score) - 2
+  p <- 2 * pt(
+    abs(coef * sqrt(df / pmax(1 - coef^2, .Machine$double.eps))),
+    df = df,
+    lower.tail = FALSE
+  )
+  
+  data.frame(
+    gene = rownames(expr),
+    coef = coef,
+    p = p,
+    p.adjust = p.adjust(p, method = "BH")
+  )
+}
 
+
+set_name <- "Ubiquitination"
+
+LMx_list <- pbapply::pblapply(seq_along(scRNA_list), function(x) {
+  
+  sce <- scRNA_list[[x]]
+  
+  
+  
+  malignant <- sce$Celltype..malignancy. == "Malignant cells"
+  
+  malignant[is.na(malignant)] <- FALSE
+  
+  cells <- colnames(sce)[malignant]
+  
+  
+  
+  counts <- Seurat::GetAssayData(
+    
+    sce,
+    
+    assay = "RNA",
+    
+    layer = "data"
+    
+  )[, cells, drop = FALSE]
+  
+  
+  
+  bp <- if (.Platform$OS.type == "windows") {
+    
+    BiocParallel::SnowParam(workers = 60, type = "SOCK", progressbar = FALSE)
+    
+  } else {
+    
+    BiocParallel::MulticoreParam(workers = 60, progressbar = FALSE)
+    
+  }
+  
+  
+  
+  gsva_param <- GSVA::gsvaParam(
+    
+    exprData = counts,
+    
+    geneSets = Lactate_Metabolism_gs,
+    
+    kcdf = "Gaussian",
+    
+    sparse = TRUE
+    
+  )
+  
+  
+  
+  LM_gsva <- GSVA::gsva(
+    
+    gsva_param,
+    
+    verbose = FALSE,
+    
+    BPPARAM = bp
+    
+  )
+  
+  
+  
+  if (!set_name %in% rownames(LM_gsva)) {
+    
+    stop(
+      
+      "Cannot find gene set: ", set_name,
+      
+      "\nAvailable gene sets are: ",
+      
+      paste(rownames(LM_gsva), collapse = ", ")
+      
+    )
+    
+  }
+  
+  
+  
+  LM_score <- as.numeric(LM_gsva[set_name, colnames(counts)])
+  
+  
+  
+  fast_spearman(counts, LM_score)
+  
+})
+
+names(LMx_list) <- names(scRNA_list)
+saveRDS(LMx_list, file = "LMx_list.rds")
 
 
 
@@ -80,7 +181,7 @@ LMy_list <- pbapply::pblapply(
 )
 
 names(LMy_list) <- names(scRNA_list)
-
+saveRDS(LMy_list, file = "LMy_list.rds")
 
 
 
@@ -130,7 +231,6 @@ sig <- genelist[genelist$all_gmean > 0.25, ]  # filter genes with spearmanR geom
 sig <- sig[order(sig$all_gmean, decreasing = T),]
 LM_SIG <- rownames(sig)
 
-saveRDS(LM_SIG, file = "LM_SIG.rds")
-
+saveRDS(LM_SIG, file = "ubiquitination_SIG.rds")
 
 
